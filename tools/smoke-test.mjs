@@ -2653,7 +2653,7 @@ console.log('== W49. #39 expanded redaction list + .yml routing + guard two + cl
   const w49root = await mkdtemp(join(tmpdir(), 'dsh-undo-test49-'));
   const home49 = join(w49root, 'home'), profile49 = join(w49root, 'profile'), snap49 = join(w49root, 'snaps');
   await mkdir(home49, { recursive: true }); await mkdir(profile49, { recursive: true });
-  const liveYml49 = '# patch layer\n- insert:\n    - id: mcp\n      config:\n        headers:\n          Authorization: Bearer sk-w49-live\n';
+  const liveYml49 = '# patch layer\n- insert:\n    - id: mcp\n      config:\n        headers:\n          Authorization: Bearer sk-w49-live\n12345 sk-w49-unmatch\nsecret: sk-w49-bare\n';
   await writeFile(join(profile49, 'cordis.patch.yml'), liveYml49);
   const tools49 = new Map();
   const ctx49 = {
@@ -2683,11 +2683,20 @@ console.log('== W49. #39 expanded redaction list + .yml routing + guard two + cl
   const m49 = await manifest49(dir49);
   const ymlInSnap49 = await readFile(join(snap49, 'manual', dir49, 'profile-cordis.patch.yml'), 'utf8');
   check(ymlInSnap49.includes(R) && !ymlInSnap49.includes('sk-w49-live'), 'W49: 快照内 .yml 被脱敏（令牌不入快照）');
+  check(!ymlInSnap49.includes('sk-w49-unmatch') && ymlInSnap49.includes(R) && !ymlInSnap49.includes('sk-w49-live'), 'W49 边界修正：无法识别的裸行仍整行丢弃（放行口未放宽）');
   check(!!m49.envVaultRefs['profile-cordis.patch.yml'], 'W49: manifest 的 envVaultRefs 含 .yml 目标名');
   check(
     (await readFile(join(vault49, `${core.sha1Hex(Buffer.from(liveYml49))}.env`), 'utf8')) === liveYml49,
     'W49: vault 按内容 sha 存原件，逐字节可恢复',
   );
+  // 边界修正：删一行可能触发数据损坏，改动后必须在这儿钉死两个面。
+  //   面一：裸的空流式标记（`[]` / `{}`）是合法空文档，且对补丁层与 profile 根文件是语义必要行，
+  //         脱敏后必须原样保留，不得被「无法识别的裸行整行丢弃」吞掉。
+  //   面二：其余裸行处理策略不变，无法识别的仍整行丢弃，列表项仍走脱敏折叠。
+  check(core.redactYamlContent('# patch layer\n[]\n') === '# patch layer\n[]\n', 'W49 边界修正：裸 [] 不再被脱敏器吞掉');
+  check(core.redactYamlContent('a: 1\n{}\n') === 'a: "***REDACTED***"\n{}\n', 'W49 边界修正：裸 {} 不再被脱敏器吞掉');
+  check(core.redactYamlContent('[]\n12345 sk-live-inline\n') === '[]\n', 'W49 边界修正：无法识别的裸行仍整行丢弃（放行口未放宽）');
+  check(core.redactYamlContent('[]\n- sk-live-inline\n') === '[]\n- "***REDACTED***"\n', 'W49 边界修正：列表项裸行仍走脱敏折叠，未被放行');
   check((await readFile(join(profile49, 'cordis.patch.yml'), 'utf8')) === liveYml49, 'W49: 采集不改活文件（脱敏只作用于快照副本）');
 
   // (4) 守卫二认 .yml（本工单唯一能损坏数据的路径，必须单独钉住）。
