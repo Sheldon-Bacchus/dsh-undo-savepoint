@@ -2,6 +2,20 @@
 
 Notable changes to dsh-undo-savepoint. Dates are in local time (UTC+8). 中文版:[CHANGELOG.md](CHANGELOG.md)
 
+## [0.5.0-canary.4] - 2026-10-04
+
+### Added
+
+- **Support range extended to the DSH desktop build.** The README and package manifest previously declared support only up to the pre-0.2.0 version lines, leaving desktop profile users unable to tell from the documentation whether they could install the plugin. The declaration now covers DSH 0.2.0-rc.2 desktop, the READMEs gained a support-range section in both languages, and the safe-mode limitation under the desktop profile is stated explicitly.
+
+### Fixed
+
+- **Generation census for session format v4.** DSH 0.2.0 writes session logs as v4, but the health census folded v4 into the v3 bucket, so desktop users saw an inflated v3 count with no way to view v4. The census now keeps v0, v2, v3 and v4 in separate buckets, counts higher generations separately, and reports them in the upgrade health log.
+
+### Tests
+
+- Added a real-file v4 session fixture generator covering the recognition, repair, health and redaction paths, 24 assertions in total; the smoke gate now stands at 466.
+
 ## [0.4.9] - 2026-09-16
 
 ### Security

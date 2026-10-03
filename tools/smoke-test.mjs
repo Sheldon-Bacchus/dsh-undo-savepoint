@@ -2342,6 +2342,107 @@ await rm(root, { recursive: true, force: true });
   // 后续工单断言块追加在本行之后（`}` 之前）。共用本区的 cfgW / rootW / hasZstdW。
   const core = await import('../lib/core.mjs');
 
+  // W44: v4 会话实测与用例扩写（批次合集 §4，附 v4 实文件夹具生成器）。
+  // E64 已修的路径由前四条断言钉住：v3 桶不再吞 v4，且 v4 是独立计数桶。
+  {
+    const fx = await import('./make-v4-session.mjs');
+    const sessionMod = await import('../lib/session.mjs');
+    const w44root = join(rootW, 'w44');
+    const censusHome = join(w44root, 'census-home');
+    const sessions44 = join(censusHome, 'sessions');
+    await mkdir(sessions44, { recursive: true });
+    await fx.writeMixed(sessions44);
+
+    // (1) mixed 夹具文件名与既有识别规则一致（一个会话目录一个日志文件）。
+    const specs = fx.sampleSpecs().map((s) => `${s.dir}/${s.file}`).sort();
+    const onDisk = [];
+    for (const d of await readdir(sessions44)) {
+      for (const f of await readdir(join(sessions44, d))) onDisk.push(`${d}/${f}`);
+    }
+    check(JSON.stringify(onDisk.sort()) === JSON.stringify(specs),
+      'W44: mixed 夹具产出六个样本，文件名与代际识别规则一致');
+    check(fx.nodeTooOld() === false, 'W44: 夹具生成器在当前 Node 上可用（zstd Zlib API 齐备）');
+
+    // (2) v4 头行：接受合规头（含 delegationDepth 与 PTC 迁移字段）、拒绝缺字段的头。
+    const hdrText44 = sessionMod.zstdDecodeAll(fx.buildSession({ generation: 4 }));
+    const hdr44 = JSON.parse(hdrText44.slice(0, hdrText44.indexOf('\n')));
+    check(hdr44.version === 4 && typeof hdr44.version === 'number', 'W44: v4 头行的 version 是数值 4');
+    check(sessionMod.analyzeSessionBytes(fx.buildSession({ generation: 4 })).status === 'ok',
+      'W44: 合规 v4 头被接受（status=ok）');
+    const noDepth = sessionMod.analyzeSessionBytes(fx.buildSession({ generation: 4, dropHeaderField: 'delegationDepth' }));
+    check(noDepth.status === 'corrupt' && /not a valid session header/.test(noDepth.reason),
+      'W44: 缺 delegationDepth 的 v4 头被拒为 corrupt');
+    check(sessionMod.parseSessionLogZstdName('session.v4.jsonl.zstd').generation === 4,
+      'W44: 会话名识别对 v4 走正则路（生成代际=4，无硬编码清单）');
+
+    // (3) 代际分布四桶：v3 桶不含 v4（E64 直接断言），v4 计数等于 v4 文件数。
+    const cen44 = await core.sessionCensus({ homeDir: censusHome });
+    check(cen44.byGeneration.v0 === 1 && cen44.byGeneration.v2 === 1,
+      'W44: v0 与 v2 桶计数各为 1');
+    check(cen44.byGeneration.v3 === 1, 'W44: v3 桶只计 v3，不吞 v4（E64 直接断言）');
+    check(cen44.byGeneration.v4 === 3, 'W44: v4 桶为 3（native + seeded + 单帧违规样本）');
+    check(cen44.total === 6 && cen44.higherGenerations === 0, 'W44: 总会话数 6 且无更高代际');
+
+    // (3b) 更高代际并入 v4 桶并单独计数，v5 起不必改代码。
+    const v5Home = join(w44root, 'v5-home');
+    await mkdir(join(v5Home, 'sessions', 'sess-v5'), { recursive: true });
+    await writeFile(join(v5Home, 'sessions', 'sess-v5', 'session.v5.jsonl.zstd'),
+      fx.buildSession({ generation: 5, id: 'fixture-v5' }));
+    const cenV5 = await core.sessionCensus({ homeDir: v5Home });
+    check(cenV5.byGeneration.v4 === 1 && cenV5.higherGenerations === 1,
+      'W44: gen>4 并入 v4 桶，同时计 higherGenerations');
+
+    // (4)(5) undo_scan 端到端：合规 v4 报 ok、单帧违规报 fixable、修复后复扫 ok 且 .bak 逐字节一致。
+    const scanHome = join(w44root, 'scan-home');
+    const scanSessions = join(scanHome, 'sessions');
+    await mkdir(scanSessions, { recursive: true });
+    await fx.writeMixed(scanSessions);
+    await fx.writeTwoFrame(scanSessions, { dir: 'sess-v4-twoframe', file: 'session.v4.jsonl.zstd', generation: 4, id: 'fixture-v4-twoframe' });
+    const tools44 = new Map();
+    const ctx44 = {
+      tools: { register: (t) => { tools44.set(t.name, t); return () => { }; } },
+      systemPrompt: { section: () => () => { } }, get: () => undefined,
+      effect: (fn) => { const d = fn(); return d ?? (() => { }); }, logger: { info: () => { }, warn: () => { } },
+    };
+    apply(ctx44, {
+      manualDir: join(w44root, 'snap', 'manual'), autoDir: join(w44root, 'snap', 'auto'),
+      homeDir: scanHome, profileDir: join(w44root, 'profile'), watch: false, pluginDirs: [],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const scan44a = await tools44.get('undo_scan').execute({}, {});
+    check(new RegExp('ok\\s+.*sess-v4-twoframe[\\\\/]session\\.v4\\.jsonl\\.zstd \\(3 events, 2 frames\\)').test(scan44a),
+      'W44: 合规两帧 v4 报 ok，事件帧计数正确');
+    check(/fixable\s+.*sess-v4-single-frame/.test(scan44a), 'W44: 单帧布局违规样本报 fixable');
+    check(/ok\s+.*sess-v4-seeded[\\/]session\.v4\.jsonl\.zstd/.test(scan44a),
+      'W44: seeded v4 报 ok（代际识别不硬编码）');
+    check(/summary: 6 ok, 0 fixed, 1 fixable, 0 isolated, 0 corrupt/.test(scan44a),
+      'W44: 扫描汇总为 6 ok / 1 fixable');
+    const single44 = join(scanSessions, 'sess-v4-single-frame', 'session.v4.jsonl.zstd');
+    const before44 = await readFile(single44);
+    const scan44b = await tools44.get('undo_scan').execute({ quarantine: true }, {});
+    check(/fixed\s+.*sess-v4-single-frame/.test(scan44b), 'W44: quarantine 修复单帧违规样本');
+    const scan44c = await tools44.get('undo_scan').execute({}, {});
+    check(new RegExp('ok\\s+.*sess-v4-single-frame[\\\\/]session\\.v4\\.jsonl\\.zstd').test(scan44c),
+      'W44: 修复后复扫为 ok');
+    check(Buffer.compare(await readFile(single44 + '.bak'), before44) === 0,
+      'W44: 修复前的原件在 .bak 中逐字节保留');
+
+    // (6) 脱敏两形态：YAML 形态覆盖 home-settings.yaml，行级形态覆盖 .env；
+    //     并钉住「v4 是第一个把头行文本写进磁盘的代际」这一事实（脱敏面必须覆盖头帧）。
+    const marker44 = fx.PLAINTEXT_MARKER;
+    const yamlW44 = `model: deepseek-flash\ndeepseek:\n  apiKey: ${marker44}\n  models:\n    - a\n    - b\nnested:\n  list:\n    - token: ${marker44}\n`;
+    const redYaml44 = core.redactYamlContent(yamlW44);
+    check(!redYaml44.includes(marker44), 'W44: YAML 形态脱敏后不含明文标记串');
+    check(core.isYamlDest('home-settings.yaml') === true, 'W44: home-settings.yaml 走 YAML 脱敏路径');
+    check(!core.redactByDest('home-.env', `MODEL=x\nAPI_KEY=${marker44}\n`).includes(marker44),
+      'W44: 行级形态脱敏后不含明文标记串');
+    check(hdrText44.includes(marker44), 'W44: v4 头帧确实携带明文标记（使上述断言有意义）');
+    check(!sessionMod.zstdDecodeAll(fx.buildSession({ generation: 3 })).includes(marker44),
+      'W44: v3 及更早的头行不携带文本内容（对照）');
+    check(typeof hdr44.systemPrompt === 'string' && hdr44.systemPrompt.includes(marker44),
+      'W44: 标记位置就在头行 systemPrompt，脱敏面必须覆盖头帧');
+  }
+
   // W03: manifest 格式字段（schemaVersion / compression），只写不读。
   {
     const snapW03 = await core.createSnapshot(cfgW, 'manual', 'w03-field-check');
