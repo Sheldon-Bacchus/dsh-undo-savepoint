@@ -513,7 +513,11 @@ out = await run11('undo_restore', { mode: 'undo' }); // 回到 s1 快照 → 预
 const preflightLine = out.split('\n').find((l) => l.includes('preflight')) ?? '';
 console.log('   ', preflightLine);
 check(out.includes('Cross-machine preflight'), 'preflight section reported');
-check(out.includes('dsh-ghost-plugin-xyz'), 'missing patch plugin named');
+// W49（#39）：补丁层文件进脱敏清单后，快照内是脱敏副本、还原侧由守卫二拒写占位符候选，
+// 因此本步的 cordis.patch.yml 保持还原前内容（挂载块被再确保），预检读不到 dsh-ghost-plugin-xyz。
+// 这不是退步：预检保护的对象是 bundle 引用（下面一条仍被点名），而补丁层凭据此前是明文入库的。
+check(!out.includes('dsh-ghost-plugin-xyz'), 'W49: patch-layer redaction keeps the placeholder out of the live patch (ghost not probed)');
+check(!out.includes('Undo failed'), 'W49: restore still reports success (skip is not an error)');
 check(out.includes('dsh-ghost-bundle-xyz'), 'missing bundle plugin named');
 check(!preflightLine.includes('router-global.mjs'), 'local file entry not probed');
 check(!preflightLine.includes('@deepseek-ai/dsh-tools'), 'resolvable bundle not flagged');
@@ -555,7 +559,10 @@ check(!snapSet12.includes('sk-live-token12'), 'no real token in snapshot setting
 check(!snapEnv12.includes('kfc-vw50'), 'no real value in snapshot .env');
 check(m12.redacted.includes('home-.env') && m12.redacted.includes('home-.credentials.yaml') && m12.redacted.includes('home-settings.yaml'), 'manifest redacted list recorded');
 check(m12.envVaultRefs['home-.env'] && m12.envVaultRefs['home-.credentials.yaml'] && m12.envVaultRefs['home-settings.yaml'], 'manifest envVaultRefs recorded');
-check((await readdir(vaultDir12)).length === 3, 'vault holds real values (3 files)');
+// W49（#39）：补丁层 cordis.patch.yml 也进脱敏清单，故 vault 多一条（4 = .env +
+// .credentials.yaml + settings.yaml + cordis.patch.yml），其 ref 与内容单独钉下面两条。
+check((await readdir(vaultDir12)).length === 4, 'vault holds real values (4 files, incl. the patch layer since W49)');
+check(!!m12.envVaultRefs['profile-cordis.patch.yml'], 'W49: manifest envVaultRefs records the patch-layer dest name');
 check((await readFile(join(vaultDir12, m12.envVaultRefs['home-.env'] + '.env'), 'utf8')).includes('kfc-vw50'), 'vault file contains the real .env');
 // 2) 本机完整回滚：改 .env → undo → 真实值还原
 await writeFile(join(home12, '.env'), '# vision api\nAPI_KEY=changed-value\nexport TOKEN="other"\nEMPTY=\n');
@@ -627,7 +634,9 @@ console.log('== W37. #41 triple guard: vault ingest + restore refusal + post-wri
   const m37a = await manifest37(await newest37());
   const vault37a = await readdir(vault37).catch(() => []);
   check(!m37a.envVaultRefs['home-settings.yaml'] && Array.isArray(m37a.redactedPreexisting) && m37a.redactedPreexisting.includes('home-settings.yaml'), 'W37 守卫一：活文件含占位符时拒绝入 vault，manifest 记 redactedPreexisting');
-  check(vault37a.length === 1 && !!m37a.envVaultRefs['home-.env'], 'W37 守卫一：只有未污染的文件入库（vault 仅 .env 一条）');
+  // W49（#39）：场景 A 夹具的 profile/cordis.patch.yml 也是 SensitiveDest，故 vault 为两条
+// （未污染的 .env + .env 之外的补丁层），被污染的 settings.yaml 仍不入库。
+check(vault37a.length === 2 && !!m37a.envVaultRefs['home-.env'] && !!m37a.envVaultRefs['profile-cordis.patch.yml'], 'W37 守卫一：只有未污染的文件入库（vault 为 .env 与补丁层两条）');
 
   // 场景 B（守卫二·降级）：vault 整体丢失 → yaml 拒写、活文件保持还原前内容；
   // .env 不拦，占位符降级行为不变。
@@ -2619,6 +2628,157 @@ await rm(root, { recursive: true, force: true });
     const skip = await core.ensureGuardShortcut({ guardShortcutEnabled: false });
     check(skip.action === 'skipped', 'W29: guard shortcut skipped by default');
   }
+}
+
+// ── W49：脱敏清单扩充（issue #39 SEC）────────────────────────────────────────
+// 反向敏感：本块断言在改动前全线变红。改动前 .yml 不在 SENSITIVE_DESTS 里，
+// profile-cordis.patch.yml 会被 copyFile 明文入库；路由只认 .yaml，.yml 会落到
+// env 脱敏器；守卫二只拦 .yaml，.yml 的占位符候选会被写回活文件。
+console.log('== W49. #39 expanded redaction list + .yml routing + guard two + cleanup tool ==');
+{
+  const core = await import('../lib/core.mjs');
+  const R = '***REDACTED***';
+  // (1) 清单七项，且三项新名字与 destName 产出逐字相同（findSpec 非空即拼写正确）
+  check(core.SENSITIVE_DESTS.size === 7, `W49: SENSITIVE_DESTS 扩到七项（实为 ${core.SENSITIVE_DESTS.size}）`);
+  check(
+    core.findSpec('home-cordis.patch.yml') && core.findSpec('profile-cordis.patch.yml') && core.findSpec('profile-cordis.yml'),
+    'W49: 三个新增目标名与 destName 产出逐字相同（findSpec 非空）',
+  );
+  // (2) .yml 与 .yaml 同路（都走 YAML 脱敏），.env 仍走 env 脱敏器
+  const yml = 'mcp:\n  headers:\n    Authorization: Bearer sk-w49-live\n';
+  check(core.redactByDest('profile-x.yml', yml) === core.redactYamlContent(yml), 'W49: .yml 走 YAML 脱敏（与 redactYamlContent 逐字节相同）');
+  check(core.isYamlDest('a.yml') && core.isYamlDest('a.yaml') && !core.isYamlDest('home-.env'), 'W49: isYamlDest 认 .yml 与 .yaml，不认 .env');
+
+  // 共享夹具：一份带 MCP 令牌的活补丁层文件
+  const w49root = await mkdtemp(join(tmpdir(), 'dsh-undo-test49-'));
+  const home49 = join(w49root, 'home'), profile49 = join(w49root, 'profile'), snap49 = join(w49root, 'snaps');
+  await mkdir(home49, { recursive: true }); await mkdir(profile49, { recursive: true });
+  const liveYml49 = '# patch layer\n- insert:\n    - id: mcp\n      config:\n        headers:\n          Authorization: Bearer sk-w49-live\n';
+  await writeFile(join(profile49, 'cordis.patch.yml'), liveYml49);
+  const tools49 = new Map();
+  const ctx49 = {
+    tools: { register: (t) => { tools49.set(t.name, t); return () => { }; } },
+    systemPrompt: { section: () => () => { } }, get: () => undefined,
+    effect: (fn) => { const d = fn(); return d ?? (() => { }); }, logger: { info: () => { }, warn: () => { } },
+  };
+  apply(ctx49, { manualDir: join(snap49, 'manual'), autoDir: join(snap49, 'auto'), homeDir: home49, profileDir: profile49, watch: false, pluginDirs: [] });
+  await new Promise((r) => setTimeout(r, 300));
+  const run49 = async (name, args) => (await tools49.get(name).execute(args, {}));
+  const vault49 = join(snap49, 'auto', 'env-vault');
+  const dirByReason49 = async (reason) => {
+    for (const d of (await readdir(join(snap49, 'manual'))).filter((x) => x !== '.booting')) {
+      try {
+        const m = JSON.parse(await readFile(join(snap49, 'manual', d, 'manifest.json'), 'utf8'));
+        if (m.reason === reason) return d;
+      } catch { /* 目录刚建、清单未落 */ }
+    }
+    return null;
+  };
+  const manifest49 = async (d) => JSON.parse(await readFile(join(snap49, 'manual', d, 'manifest.json'), 'utf8'));
+
+  // (3) vault 真值恢复：快照内替换成脱敏副本，明文必须在 vault 里且 ref 写进 manifest；
+  //     同一内容跨快照跨 dest 按内容 sha 去重，.yml 与 .yaml 各占自己的 manifest 键。
+  await run49('undo_snapshot', { reason: 'w49-vault' });
+  const dir49 = await dirByReason49('w49-vault');
+  const m49 = await manifest49(dir49);
+  const ymlInSnap49 = await readFile(join(snap49, 'manual', dir49, 'profile-cordis.patch.yml'), 'utf8');
+  check(ymlInSnap49.includes(R) && !ymlInSnap49.includes('sk-w49-live'), 'W49: 快照内 .yml 被脱敏（令牌不入快照）');
+  check(!!m49.envVaultRefs['profile-cordis.patch.yml'], 'W49: manifest 的 envVaultRefs 含 .yml 目标名');
+  check(
+    (await readFile(join(vault49, `${core.sha1Hex(Buffer.from(liveYml49))}.env`), 'utf8')) === liveYml49,
+    'W49: vault 按内容 sha 存原件，逐字节可恢复',
+  );
+  check((await readFile(join(profile49, 'cordis.patch.yml'), 'utf8')) === liveYml49, 'W49: 采集不改活文件（脱敏只作用于快照副本）');
+
+  // (4) 守卫二认 .yml（本工单唯一能损坏数据的路径，必须单独钉住）。
+  //     先给 .yml 一个指向占位符 vault 条目的 ref，走 guard-two 的 vault 分支；
+  //     再手工改 manifest 抹掉 ref 退回快照副本，走 no-ref 分支。
+  //     断言口径：restore 收尾会「再确保挂载」往活文件追加挂载块，故不能断全等，
+  //     改断「还原前内容被保留为前缀」+「占位符未被写入」。
+  const snapYml49 = join(snap49, 'manual', dir49, 'profile-cordis.patch.yml');
+  const pre49 = '# patch layer\npre-restore-49\n';
+  await writeFile(join(profile49, 'cordis.patch.yml'), pre49);
+  const phSha49 = core.sha1Hex(Buffer.from(`${R}\n`));
+  await mkdir(vault49, { recursive: true });
+  await writeFile(join(vault49, `${phSha49}.env`), `${R}\n`);
+  await writeFile(join(profile49, '.env'), 'API_KEY=live-49\n');
+  await run49('undo_snapshot', { reason: 'w49-guard2a' });
+  const snapB49 = await dirByReason49('w49-guard2a');
+  const mB49 = await manifest49(snapB49);
+  mB49.envVaultRefs['profile-cordis.patch.yml'] = phSha49;
+  await writeFile(join(snap49, 'manual', snapB49, 'manifest.json'), JSON.stringify(mB49));
+  await writeFile(join(profile49, 'cordis.patch.yml'), pre49);
+  const outB49 = await run49('undo_restore', { mode: 'id', snapshot_id: snapB49 });
+  const liveB49 = await readFile(join(profile49, 'cordis.patch.yml'), 'utf8');
+  check(
+    liveB49.startsWith(pre49) && !liveB49.includes(R),
+    'W49 守卫二：vault 条目为占位符时 .yml 拒写（活文件未被占位符覆盖）',
+  );
+  check(liveB49.includes('dsh-undo-savepoint mount'), 'W49 守卫二：挂载块仍被再确保（拒写不破坏挂载）');
+  check(String(outB49).includes('Skipped') && String(outB49).includes('file skipped to keep the live file intact'), 'W49 守卫二：.yml 拒写在工具输出里明示（file skipped）');
+
+  // (5) 守卫二反向敏感钉：手工造一份「无 ref 的老快照」（脱敏副本无 vault ref）。
+  //     同一份 restore 里 .env（清单第三项）仍按文档化降级写占位符，.yml 必须被拦。
+  const snapC49 = join(snap49, 'manual', 'w49-legacy-fixed');
+  await mkdir(snapC49, { recursive: true });
+  await writeFile(join(snapC49, 'profile-cordis.patch.yml'), ymlInSnap49);
+  await writeFile(join(snapC49, 'home-.env'), `API_KEY=${R}\n`);
+  await writeFile(join(snapC49, 'manifest.json'), JSON.stringify({
+    id: 'w49-legacy-fixed', time: new Date().toISOString(), kind: 'manual', reason: 'w49-legacy',
+    files: [{ name: 'profile-cordis.patch.yml', size: Buffer.byteLength(ymlInSnap49) }, { name: 'home-.env', size: 24 }],
+    plugins: [], profileFiles: [], sensitiveMode: 'redact', redacted: ['profile-cordis.patch.yml', 'home-.env'],
+    envVaultRefs: {}, profile: 'web',
+  }));
+  await writeFile(join(profile49, 'cordis.patch.yml'), pre49);
+  // snapshot_id 只接受快照目录名（不是绝对路径）。
+  const outC49 = await run49('undo_restore', { mode: 'id', snapshot_id: 'w49-legacy-fixed' });
+  const liveC49 = await readFile(join(profile49, 'cordis.patch.yml'), 'utf8');
+  check(
+    liveC49.startsWith(pre49) && !liveC49.includes(R),
+    'W49 守卫二：无 ref 老快照的 .yml 候选含占位符 ⇒ 拒写（反向敏感：改动前此处会被覆盖）',
+  );
+  check(String(outC49).includes('Skipped') && String(outC49).includes('file skipped to keep the live file intact'), 'W49 守卫二：无 ref 分支同样明示跳过');
+  check(
+    (await readFile(join(home49, '.env'), 'utf8')).includes(R),
+    'W49 守卫二：.env 不拦，占位符降级行为不变（文档化降级）',
+  );
+
+  // (6) redact-existing：dry-run 零写盘、--apply 处理存量、二次跑幂等
+  const existing49 = join(w49root, 'existing');
+  const legacy49 = join(existing49, '20260930-120000-aaaa');
+  await mkdir(legacy49, { recursive: true });
+  await writeFile(join(legacy49, 'profile-cordis.patch.yml'), liveYml49);
+  await writeFile(join(legacy49, 'home-cordis.patch.yml'), 'x: sk-w49-home-plain\n');
+  await writeFile(join(legacy49, 'manifest.json'), JSON.stringify({
+    id: '20260930-120000-aaaa', time: new Date().toISOString(), kind: 'auto', reason: 'legacy-live',
+    files: [{ name: 'profile-cordis.patch.yml', size: Buffer.byteLength(liveYml49) }],
+    plugins: [], profileFiles: [], sensitiveMode: 'redact', redacted: [], envVaultRefs: {}, profile: 'web',
+  }));
+  const tool49 = await import('./redact-existing.mjs');
+  const cfg49 = core.buildConfig({ autoDir: existing49, manualDir: join(existing49, 'manual'), homeDir: home49, profileDir: profile49 });
+  const dry49 = await tool49.run({ ...cfg49, apply: false });
+  check(
+    dry49.processed === 2 && dry49.vaultAdded === 0 && (await readFile(join(legacy49, 'profile-cordis.patch.yml'), 'utf8')) === liveYml49,
+    'W49 存量工具：dry-run 报告 2 项且磁盘逐字节不变',
+  );
+  const applied49 = await tool49.run({ ...cfg49, apply: true });
+  const afterYml49 = await readFile(join(legacy49, 'profile-cordis.patch.yml'), 'utf8');
+  const mLegacy49 = JSON.parse(await readFile(join(legacy49, 'manifest.json'), 'utf8'));
+  check(
+    applied49.processed === 2 && applied49.vaultAdded === 2 && afterYml49.includes(R) && !afterYml49.includes('sk-w49-live'),
+    'W49 存量工具：--apply 处理 2 项，快照内明文替换为占位符',
+  );
+  check(
+    !!mLegacy49.envVaultRefs['profile-cordis.patch.yml'] &&
+      (await readFile(join(existing49, 'env-vault', `${mLegacy49.envVaultRefs['profile-cordis.patch.yml']}.env`), 'utf8')) === liveYml49,
+    'W49 存量工具：明文原件入 vault 且 ref 写回 manifest（内容寻址，逐字节相同）',
+  );
+  const again49 = await tool49.run({ ...cfg49, apply: true });
+  check(again49.processed === 0 && again49.skipped >= 1, 'W49 存量工具：二次跑幂等（处理 0 项）');
+  // (7) 工具体内不得引入子进程（W33 同类约束）
+  const reSrc49 = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'redact-existing.mjs'), 'utf8');
+  check(!/\b(?:execFile|spawn|exec)\s*\(/.test(reSrc49), 'W49 存量工具：不含任何子进程调用');
+  await rm(w49root, { recursive: true, force: true });
 }
 
 console.log(`\n== RESULT: ${pass} passed, ${fail} failed ==`);
