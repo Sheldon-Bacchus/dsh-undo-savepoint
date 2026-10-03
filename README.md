@@ -141,6 +141,41 @@ mklink /J "<你的DSH安装>\node_modules\dsh-undo-savepoint" "D:\dsh\plugins\ds
 
 > 依赖说明：host 插件通过 `createRequire('<DSH安装根>/package.json')` 加载 `@deepseek-ai/dsh-tools`。若 DSH 安装在其他位置，设置环境变量 `DSH_ROOT=<DSH安装根>` 即可，无需额外安装依赖。
 
+## 支持范围（DSH 版本）
+
+插件安装与 profile 启动时会按本包声明的 DSH 范围核对运行时（`dsh --version` 显示的那个）版本，不匹配即拒绝加载。`package.json` 的 `engines.dsh` 是一串并列范围，覆盖 `0.1.x` 的历次声明，末段为 `>=0.2.0-rc.2`。
+
+已验证：桌面版 DSH 0.2.0-rc.2（cordis 4.0.4 全 peer 树），同时覆盖 `web` profile 与命令行、局外 WebUI、局外 CLI。工程内四道门禁零失败，覆盖 CLI 与 Web 端。
+
+待验证：桌面端真机验收。勾掉之前构建仍按真机验收项标注口径。
+
+若你的 DSH 版本不在声明范围内，启动会被判不兼容。此时不要改 `package.json`，改用官方的精确版本豁免，豁免写在 profile 自己的 `compatibility.json` 里，不动依赖清单与 patch 层：
+
+```bat
+dsh plugin --profile web version-exemptions
+dsh plugin --profile web allow-version dsh-undo-savepoint@0.4.9 --dsh-version <运行时版本> --accept-risk
+dsh plugin --profile web revoke-version dsh-undo-savepoint@0.4.9 --dsh-version <运行时版本>
+```
+
+第一条列出现有授权，第二条提交豁免，第三条撤销。豁免只授权加载，不授权依赖脚本；插件升级与 DSH 升级都不继承授权，每次都要重新确认。范围声明没有写死到最新版，是因为 DSH 各版仍可能有破坏性变动，新版本要实测过再扩范围。
+
+### 桌面端
+
+桌面版 DSH 从它自己的安装目录启动，走的是 desktop profile，命令把 `web` 换成 `desktop` 即可，`add` / `remove` / 版本豁免三命令用法一致。
+
+```bat
+dsh plugin --profile desktop add github:lire1131/dsh-undo-savepoint#master
+```
+
+前置：先启动一次桌面端完成初始化，再**完全退出**桌面客户端，然后敲上面的命令。桌面端在跑时 profile 目录被占用，写入会失败或半写。
+
+**官方恢复弹窗与插件。** 0.2.0 桌面版遇到致命错误时会弹原生三按钮窗：退出、重启、禁用第三方插件并重启。第三个按钮会摘掉第三方插件在 bundles 挂载清单里的条目、把 profile patch 备份为 `cordis.patch.yml.bak-<时间戳>`，包本体保留。两点要记住：
+
+1. 被该按钮禁用后**不需要重装**。包还在 profile 目录里，dependencies 也没动，把挂载声明恢复回去就复活。
+2. **profile patch 被挪走时，容错补丁（tolerate / isolate / selfheal）随之失效。** 手动恢复 bundles 而漏掉 patch 的话，旧版会话可能踩已知坑。两条恢复路径任选：手动把 `cordis.patch.yml.bak-<时间戳>` 还原为 `cordis.patch.yml` 后重启，或重跑一次插件安装后处理，由它重建 bundles 与 patch。
+
+**safe-mode 限制。** 桌面形态下 safe-mode 会被拒绝执行，逃生舱是官方恢复弹窗的第三个按钮。
+
 ## 卸载
 
 ### 标准卸载

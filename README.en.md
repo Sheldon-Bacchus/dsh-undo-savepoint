@@ -125,6 +125,41 @@ mklink /J "<your-dsh-install>\node_modules\dsh-undo-savepoint" "D:\dsh\plugins\d
 
 > Dependency note: the host plugin loads `@deepseek-ai/dsh-tools` via `createRequire('<dsh-install-root>/package.json')`. If DSH lives elsewhere, set the environment variable `DSH_ROOT=<dsh-install-root>`, no extra package installation needed.
 
+## Support range (DSH versions)
+
+At install time and at profile startup the plugin compares the runtime version reported by `dsh --version` against the range this package declares, and refuses to load on a mismatch. `engines.dsh` in `package.json` is a chain of parallel ranges covering the successive `0.1.x` declarations, ending with `>=0.2.0-rc.2`.
+
+Verified: DSH 0.2.0-rc.2 desktop build (full peer tree with cordis 4.0.4), covering the `web` profile together with the command line, the offline WebUI and the offline CLI. All four in-repo gates pass with zero failures, which is what the CLI and web coverage rests on.
+
+Pending: on-device acceptance on the desktop edition. Until that is ticked off the desktop row keeps the pending label.
+
+If your DSH version falls outside the declared range, startup reports it as incompatible. Do not edit `package.json`; use the official exact-version exemption instead, which lives in the profile's own `compatibility.json` and touches neither the dependency manifest nor the patch layer:
+
+```bat
+dsh plugin --profile web version-exemptions
+dsh plugin --profile web allow-version dsh-undo-savepoint@0.4.9 --dsh-version <runtime> --accept-risk
+dsh plugin --profile web revoke-version dsh-undo-savepoint@0.4.9 --dsh-version <runtime>
+```
+
+The first lists existing grants, the second submits one, the third revokes it. An exemption only authorises loading, never dependency scripts, and neither a plugin upgrade nor a DSH upgrade inherits a grant, so each of them needs a fresh confirmation. The declared range is not pinned to the newest release because DSH can still ship breaking changes; the range expands once a new version has been tested here.
+
+### Desktop
+
+The DSH desktop build starts from its own installation directory and runs the desktop profile; swap `web` for `desktop` and `add` / `remove` / the three version-exemption commands all work the same way.
+
+```bat
+dsh plugin --profile desktop add github:lire1131/dsh-undo-savepoint#master
+```
+
+Prerequisite: launch the desktop client once so the profile initialises, then quit it **completely** before running the command above. While the desktop build is running its profile directory is held, so a write either fails or lands half applied.
+
+**The official recovery dialog and this plugin.** When DSH 0.2.0 on the desktop hits a fatal error it shows a native dialog with three buttons: quit, restart, and disable third-party plugins and restart. The third button drops third-party entries from the bundle mount list and backs the profile patch up to `cordis.patch.yml.bak-<timestamp>`, keeping the package itself. Two things to remember:
+
+1. Being disabled by that button does **not** require a reinstall. The package stays in the profile directory with its dependencies untouched, so restoring the mount declaration brings it back.
+2. **When the profile patch is moved aside, the tolerance patches (tolerate / isolate / selfheal) stop applying with it.** If you restore the bundles by hand and leave the patch out, older sessions can hit known pitfalls. Two recovery paths, either one works: rename `cordis.patch.yml.bak-<timestamp>` back to `cordis.patch.yml` and restart, or re-run the plugin's post-install step and let it rebuild the bundles and the patch.
+
+**The safe-mode limitation.** On the desktop build safe mode is refused, and the escape hatch is the third button of the official recovery dialog.
+
 ## Uninstall
 
 ### Standard uninstall

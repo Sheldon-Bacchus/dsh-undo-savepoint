@@ -1389,6 +1389,23 @@ console.log('== B4b. patch manifest: multi-version substrings + client declarati
   const fullNames = ['@deepseek-ai/dsh-client-locale', '@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-settings'];
   check(JSON.stringify(pkg.dsh.client.inject) === JSON.stringify(fullNames), 'B4b: dsh.client.inject uses full package names');
   check(pkg.engines.dsh.includes('0.1.2-rc.1') && pkg.engines.dsh.includes('0.1.5-rc.1') && pkg.engines.dsh.includes('0.1.5-rc.2'), 'B4b: engines.dsh covers 0.1.2-rc.1, 0.1.5-rc.1 and 0.1.5-rc.2');
+  // W42：engines 追加 0.2.0-rc.2 段（维持 OR 串风格，不重构）。
+  const dshSegs = String(pkg.engines.dsh).split('||').map((s) => s.trim());
+  const w42Base = ['>=0.0.1-0', '>=0.1.0-rc.2', '>=0.1.1-rc.1', '>=0.1.2-alpha.2', '>=0.1.2-rc.1', '>=0.1.5-rc.1', '>=0.1.5-rc.2'];
+  check(
+    typeof pkg.engines.dsh === 'string' && dshSegs[dshSegs.length - 1] === '>=0.2.0-rc.2' && JSON.stringify(dshSegs.slice(0, -1)) === JSON.stringify(w42Base),
+    'W42: engines.dsh 末段为 >=0.2.0-rc.2 且原有七段逐字保留（OR 串未重构）',
+  );
+  check(pkg.version === '0.4.9', 'W42: package.json version 仍为 0.4.9（canary 批次不改版本号）');
+  const readmes42 = [
+    ['README.md', '桌面端'],
+    ['README.en.md', 'Desktop'],
+  ];
+  for (const [rmFile, rmHeading] of readmes42) {
+    const rm = await readFile(fileURLToPath(new URL('../' + rmFile, import.meta.url)), 'utf8');
+    const ok42 = rm.includes('desktop profile') && rm.includes('0.2.0-rc.2') && rm.includes(rmHeading) && /safe/i.test(rm) && rm.includes('cordis.patch.yml.bak-');
+    check(ok42, 'W42: ' + rmFile + ' 含 desktop profile、0.2.0-rc.2、桌面小节标题、safe-mode 警示与恢复弹窗痕迹');
+  }
   const clientText = await readFile(fileURLToPath(new URL('../lib/client.js', import.meta.url)), 'utf8');
   check(clientText.includes('const inject = ["locale", "slots"];'), 'B4b: client.js inject uses short service names');
 }
