@@ -58,7 +58,7 @@ if (args.fix) {
     process.exit(r.report.ok ? 0 : 1);
   }
   console.log('== dsh-undo doctor --fix ==');
-  console.log(`profile: ${cfg.profileName}   home: ${DSH_HOME}`);
+  console.log(`profile: ${cfg.profileName}   source: ${cfg.profileSource ?? 'default'}   home: ${DSH_HOME}`);
   if (r.snapshotId) console.log(`pre-fix snapshot: ${r.snapshotId}`);
   if (r.applied.length === 0) console.log('nothing to repair.');
   for (const a of r.applied) {
@@ -77,6 +77,7 @@ if (args.json) {
   process.exit(report.ok ? 0 : 1);
 }
 console.log('== dsh-undo doctor ==');
-console.log(`profile: ${cfg.profileName}   home: ${DSH_HOME}`);
+// W47：profile 是怎么定出来的要能一眼看见，离线诊断与局内 undo_doctor 口径一致。
+console.log(`profile: ${cfg.profileName}   source: ${cfg.profileSource ?? 'default'}   home: ${DSH_HOME}`);
 printReport(report);
 process.exit(report.ok ? 0 : 1);

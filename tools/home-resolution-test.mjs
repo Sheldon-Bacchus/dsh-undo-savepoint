@@ -93,6 +93,16 @@ async function parent() {
   const tmpC = await mkdtemp(join(tmpdir(), 'dsh-undo-home-c-'));
   const envEmpty = { ...process.env, UNDO_HOME_TEST: 'empty', UNDO_HOME_TMP: tmpC, USERPROFILE: tmpC, HOME: tmpC, DSH_HOME: '' };
 
+  // W47：本文件断言的是「派生路径跟着 DSH_HOME / USERPROFILE 走」，所以必须只留这几项
+  // 在起作用。从 DSH 宿主里跑（含 CI、桌面版会话）时，进程环境里带着宿主注入的
+  // DSH_PROFILE 与可能存在的 DSH_UNDO_*，W47 的 profile 解析链认这些键，会把 profile
+  // 解成宿主的值，夹具就落在错的作用域。三个分支统一清掉，让「档位」只由本文件的设置决定。
+  for (const env of [envHonored, envDefault, envEmpty]) {
+    delete env.DSH_PROFILE;
+    delete env.DSH_UNDO_SETTINGS;
+    delete env.DSH_UNDO_ROOT;
+  }
+
   let pass = 0, fail = 0;
   for (const [label, env] of [['honored(DSH_HOME set)', envHonored], ['default(DSH_HOME unset)', envDefault], ['empty(DSH_HOME="")', envEmpty]]) {
     console.log(`== ${label} ==`);

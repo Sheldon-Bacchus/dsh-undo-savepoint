@@ -2407,6 +2407,137 @@ await rm(root, { recursive: true, force: true });
       'W46: 豁免位置逐字未动且无悬空 insert 键');
   }
 
+  // W47: profileName 六层检测链与快照库连续性守卫（issue #43 问题 1、#44 问题 1）。
+  // 层序由决策点 9 拍板：plugin config > settings 文件 > argv --profile > 宿主 profile 通道
+  // > DSH_PROFILE > web。断言直接打解析器函数，不依赖真实 profileContext（真机行为由 W45
+  // 第三项第 4 条观察）。
+  {
+    const base = await import('../lib/base.mjs');
+    const { t: tW47 } = await import('../lib/i18n.mjs');
+    // 夹具必须同时满足两件事：loadSettingsFile() 读的是 base.mjs **加载期**捕获的
+    // SETTINGS_FILE（本文件头部就把环境变量钉在了临时根上），而 base.LEGACY_ROOT 同理。
+    // 第 2316 行之后的 re-bind 对已加载模块无效，所以夹具直接取 base 的常量并把环境变量
+    // 对齐到同一处，再断言两者都落在临时根，避免用例静默空跑或碰到真实 home。
+    const w47settings = base.SETTINGS_FILE;
+    const w47settingsIsTemp = w47settings.startsWith(tmpdir()) && base.LEGACY_ROOT.startsWith(tmpdir());
+    let w47settingsBackup = null;
+    let w47settingsHadFile = false;
+    try { w47settingsBackup = await readFile(w47settings, 'utf8'); w47settingsHadFile = true; } catch { /* 本来就没有 */ }
+    await mkdir(dirname(w47settings), { recursive: true });
+    const savedSettingsW = process.env.DSH_UNDO_SETTINGS;
+    const savedProfileW = process.env.DSH_PROFILE;
+    process.env.DSH_UNDO_SETTINGS = w47settings;
+    delete process.env.DSH_PROFILE;
+    const writeW47Settings = (obj) => writeFile(w47settings, JSON.stringify(obj), 'utf8');
+    try {
+      check(w47settingsIsTemp, 'W47: 设置文件与快照库都落在临时根（夹具不碰真实 home）');
+      // (1) argv 旗标命中：两种写法都算 arg 层。
+      await writeW47Settings({});
+      const r47a1 = base.resolveProfileName({ argv: ['--profile', 'work'] });
+      check(r47a1.name === 'work' && r47a1.source === 'arg', 'W47: argv `--profile work` 命中 arg 层');
+      const r47a2 = base.resolveProfileName({ argv: ['--profile=work'] });
+      check(r47a2.name === 'work' && r47a2.source === 'arg', 'W47: argv `--profile=work` 命中 arg 层');
+      // (2) 宿主通道命中：argv 无 profile 时由 profileContext 决定。
+      const r47b = base.resolveProfileName({ argv: [], hostProfileName: 'desktop' });
+      check(r47b.name === 'desktop' && r47b.source === 'host', 'W47: 宿主 profile 通道命中 host 层');
+      // (3) 环境变量命中：仅在 CLI 手工 export 时生效（桌面形态读不到，见层 5 注释）。
+      process.env.DSH_PROFILE = 'cli-profile';
+      const r47c = base.resolveProfileName({ argv: [], hostProfileName: null });
+      check(r47c.name === 'cli-profile' && r47c.source === 'env', 'W47: DSH_PROFILE 命中 env 层');
+      // (4) 各层全缺 -> web 兜底。
+      delete process.env.DSH_PROFILE;
+      const r47d = base.resolveProfileName({ argv: [] });
+      check(r47d.name === 'web' && r47d.source === 'default', 'W47: 各层全缺时落 web / default');
+      // (5) settings 档生效，且 config 层仍压过 settings 层（层序）。
+      await writeW47Settings({ profileName: 'desk' });
+      const r47e = base.resolveProfileName({ argv: [] });
+      check(r47e.name === 'desk' && r47e.source === 'settings',
+        `W47: settings 文件的 profileName 生效（得到 ${r47e.name}/${r47e.source}；文件 ${w47settings}；base 快照 ${base.SETTINGS_FILE}）`);
+      const r47e2 = base.resolveProfileName({ configProfileName: 'cfg', argv: [] });
+      check(r47e2.name === 'cfg' && r47e2.source === 'config', 'W47: config 层压过 settings 层');
+      await writeW47Settings({});
+      // (7) 非默认 home 变体（#44 数据点）：home 走临时目录，profileDir 必须基于该 home。
+      // 先把 settings 档清空，否则本用例会先在 settings 层命中，测不到宿主通道。
+      await writeW47Settings({});
+      const r47g = base.resolveProfileName({ argv: [], hostProfileName: 'desktop' });
+      const w47home = join(rootW, 'w47', 'nondefault-home');
+      const cfg47g = base.buildConfig({ homeDir: w47home, hostProfileName: 'desktop' });
+      check(r47g.name === 'desktop' && r47g.source === 'host'
+        && cfg47g.profileName === 'desktop' && cfg47g.profileSource === 'host'
+        && cfg47g.profileDir === join(w47home, 'profiles', 'desktop'),
+        `W47: 非默认 home 变体下 profileDir 仍基于该 home（${cfg47g.profileName}/${cfg47g.profileSource}/${cfg47g.profileDir}）`);
+      // (2b) 既有 detectProfileName 的签名与语义必须逐字不变。
+      check(base.detectProfileName(['--profile', 'mine']) === 'mine'
+        && base.detectProfileName(['--profile=mine']) === 'mine'
+        && base.detectProfileName(['--profile']) === 'web',
+        'W47: detectProfileName 旧签名与语义逐字保持');
+      // (8) 连续性守卫：目标作用域为空而历史位置有快照时沿用既有位置；
+      //     显式来源不触发继承，web 自身保留旧平铺回退。
+      // 守卫读的是 base.mjs 加载期固定的 LEGACY_ROOT（= DSH_UNDO_ROOT），所以夹具必须
+      // 建在真实 LEGACY_ROOT 下，不能自造一个假根；用完立刻清掉，避免污染后续断言块。
+      const w47legacyRoot = base.LEGACY_ROOT;
+      const w47legacyWeb = join(w47legacyRoot, 'web');
+      await mkdir(join(w47legacyWeb, 'auto'), { recursive: true });
+      try {
+        const g47 = base.resolveStoreRoots('desktop', { source: 'default' });
+        check(g47.autoDir === join(w47legacyWeb, 'auto') && g47.inheritedFrom === 'web',
+          'W47: 守卫在目标作用域为空时沿用 web 作用域并记录来源');
+        const g47b = base.resolveStoreRoots('desktop', { source: 'config' });
+        check(g47b.autoDir === join(w47legacyRoot, 'desktop', 'auto') && !g47b.inheritedFrom,
+          'W47: 显式来源不触发继承');
+        // buildConfig 接线：settings 来源同样触发继承，且 cfg 记下 storeInheritedFrom。
+        await writeFile(w47settings, JSON.stringify({ profileName: 'desktop' }), 'utf8');
+        const cfg47inh = base.buildConfig({ homeDir: join(rootW, 'w47', 'inh-home') });
+        check(cfg47inh.profileName === 'desktop' && cfg47inh.profileSource === 'settings'
+          && cfg47inh.autoDir === join(w47legacyWeb, 'auto') && cfg47inh.storeInheritedFrom === 'web',
+          `W47: buildConfig 沿用历史位置并记 storeInheritedFrom（${cfg47inh.profileName}/${cfg47inh.profileSource}/${cfg47inh.autoDir}，期望 ${join(w47legacyWeb, 'auto')}）`);
+        await writeFile(w47settings, JSON.stringify({}), 'utf8');
+      } finally {
+        await rm(w47legacyWeb, { recursive: true, force: true });
+      }
+      const g47c = base.resolveStoreRoots('web', { source: 'default' });
+      check(g47c.autoDir.endsWith(join('undo-snapshots', 'web', 'auto')) && !g47c.inheritedFrom,
+        'W47: web 不触发继承（保留旧平铺回退）');
+      // (6) #43 报告者场景金样（端到端）：home 下只有 profiles/desktop，argv 无 --profile，
+      //     宿主通道注入 desktop。快照与 manifest 的 profile 字段都必须落在 desktop。
+      const w47root = join(rootW, 'w47', 'golden');
+      const w47home2 = join(w47root, 'dsh-home');
+      const w47profile = join(w47home2, 'profiles', 'desktop');
+      const w47manual = join(w47root, 'snaps', 'manual');
+      const w47auto = join(w47root, 'snaps', 'auto');
+      await mkdir(w47profile, { recursive: true });
+      await writeFile(join(w47home2, 'settings.yaml'), 'model: x\n');
+      await writeFile(join(w47profile, 'cordis.patch.yml'), '# patch\n[]\n');
+      const w47tools = new Map();
+      const w47ctx = {
+        tools: { register: (t) => { w47tools.set(t.name, t); return () => { }; } },
+        systemPrompt: { section: () => () => { } }, get: () => undefined,
+        profileContext: { name: 'desktop' },
+        effect: (fn) => { const d = fn(); return d ?? (() => { }); },
+        logger: { info: () => { }, warn: () => { } },
+      };
+      apply(w47ctx, { manualDir: w47manual, autoDir: w47auto, homeDir: w47home2, pluginDirs: [], watch: false });
+      await new Promise((r) => setTimeout(r, 300));
+      const w47snap = await w47tools.get('undo_snapshot').execute({ reason: 'w47' }, {});
+      const w47id = (await readdir(w47manual)).find((d) => d !== '.booting');
+      const w47m = JSON.parse(await readFile(join(w47manual, w47id, 'manifest.json'), 'utf8'));
+      check(w47m.profile === 'desktop' && w47m.files.some((f) => f.name === 'home-settings.yaml'),
+        'W47: 宿主通道命中后快照 manifest 记为 desktop 且收下 home 配置');
+      const w47list = await w47tools.get('undo_list').execute({}, {});
+      check(String(w47list).includes('Profile: desktop') && String(w47list).includes(tW47('profile.source', { src: 'host' })),
+        'W47: undo_list 尾注带 profile 名与来源');
+      check(!!w47snap, 'W47: 金样场景下快照动作正常返回');
+    } finally {
+      if (savedSettingsW === undefined) delete process.env.DSH_UNDO_SETTINGS; else process.env.DSH_UNDO_SETTINGS = savedSettingsW;
+      if (savedProfileW === undefined) delete process.env.DSH_PROFILE; else process.env.DSH_PROFILE = savedProfileW;
+      // 恢复设置文件：后续断言块（cfgW 的 publicSettings / 快照用例）读同一份文件。
+      try {
+        if (w47settingsHadFile) await writeFile(w47settings, w47settingsBackup, 'utf8');
+        else await rm(w47settings, { force: true });
+      } catch { /* 恢复失败不掩盖断言结果 */ }
+    }
+  }
+
   // W44: v4 会话实测与用例扩写（批次合集 §4，附 v4 实文件夹具生成器）。
   // E64 已修的路径由前四条断言钉住：v3 桶不再吞 v4，且 v4 是独立计数桶。
   {
