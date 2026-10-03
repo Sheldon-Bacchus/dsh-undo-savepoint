@@ -2342,6 +2342,71 @@ await rm(root, { recursive: true, force: true });
   // 后续工单断言块追加在本行之后（`}` 之前）。共用本区的 cfgW / rootW / hasZstdW。
   const core = await import('../lib/core.mjs');
 
+  // W46: dedupeMount 的 config 豁免与悬空 insert 清理（批次合集 §5，issue #43）。
+  // 判定口径两处收紧：挂载条目按 `id:`/`name:` 识别（不再按子串），
+  // 摘除粒度落在条目上（同级兄弟条目不被连带删除）。
+  {
+    const w46 = join(rootW, 'w46');
+    await mkdir(w46, { recursive: true });
+    const w46Read = async (p) => (await readFile(p, 'utf8')).replace(/\n$/, '');
+
+    // 1. 同一 `- insert:` 键下并列「插件条目 + 带 config 的用户条目」：用户条目须逐字保留。
+    const p1 = join(w46, 'exempt.yml');
+    await writeFile(p1, '- insert:\n  - id: dsh-undo-savepoint\n    name: dsh-undo-savepoint\n  - id: dsh-mcp-client\n    name: dsh-mcp-client\n    config:\n      headers:\n        Authorization: Bearer sk-w46-keep\n', 'utf8');
+    const r1 = await core.removeMountBlock(p1);
+    const t1 = await w46Read(p1);
+    check(!t1.includes('dsh-undo-savepoint') && r1.removed === 1,
+      'W46: 带 config 的同级用户条目未被连带删除，插件条目已摘除');
+    check(t1.includes('Authorization: Bearer sk-w46-keep'),
+      'W46: 用户 config 条目逐字保留');
+
+    // 2. 收紧识别：用户条目在 config 文本里提到插件名，不得被当作挂载条目删除。
+    const p2 = join(w46, 'mention.yml');
+    await writeFile(p2, '- insert:\n  - id: dsh-mcp-client\n    name: dsh-mcp-client\n    config:\n      note: "dsh-undo-savepoint is installed"\n      headers:\n        Authorization: Bearer sk-w46-keep\n', 'utf8');
+    await core.removeMountBlock(p2);
+    const t2 = await w46Read(p2);
+    check(t2.includes('sk-w46-keep') && t2.includes('dsh-undo-savepoint'),
+      'W46: 用户条目自述文字里的插件名不被误判为挂载（旧实现会清空文件）');
+
+    // 3. 标记分支：插件条目自带 config 块，其后并列用户条目。摘除后不得留裸 config 残块。
+    const p3 = join(w46, 'marker.yml');
+    await writeFile(p3, '# dsh-undo-savepoint mount\n- insert:\n  - id: dsh-undo-savepoint\n    name: dsh-undo-savepoint\n    config:\n      retries: 3\n  - id: dsh-mcp-client\n    name: dsh-mcp-client\n    config:\n      headers:\n        Authorization: Bearer sk-w46-keep\n', 'utf8');
+    await core.removeMountBlock(p3);
+    const t3 = await w46Read(p3);
+    check(!t3.includes('dsh-undo-savepoint') && !t3.includes('retries: 3') && !t3.includes('mount'),
+      'W46: 标记注释随其所属条目一并清除，不留裸 config 残块');
+    check(t3.includes('sk-w46-keep'), 'W46: 标记分支下用户条目仍逐字保留');
+
+    // 4. 悬空 insert 检出与清理（不经 removeMountBlock，直接构造悬空形状）。
+    const p4a = join(w46, 'dangling.yml');
+    const p4b = join(w46, 'healthy.yml');
+    await writeFile(p4a, '# patch\ninsert:\n\n', 'utf8');
+    await writeFile(p4b, '- insert:\n    - id: x\n      name: x\n', 'utf8');
+    const hitA = core.findDanglingInserts(await readFile(p4a, 'utf8'));
+    const hitB = core.findDanglingInserts(await readFile(p4b, 'utf8'));
+    check(hitA.length === 1 && hitB.length === 0 && hitA[0].line === 2,
+      'W46: findDanglingInserts 只在悬空文件上命中且给出行号');
+    check((await core.cleanDanglingInserts(p4a)) === 1 && (await core.cleanDanglingInserts(p4a)) === 0,
+      'W46: cleanDanglingInserts 清理计数为 1 且二次调用幂等');
+    check(!(await w46Read(p4a)).includes('insert:') && (await readFile(p4b, 'utf8')).includes('insert:'),
+      'W46: 悬空键被清除，健康文件的 insert 键不受影响');
+
+    // 5. #43 报告者形状走完整 dedupeMount 链：豁免上报、文件不被删、无悬空键。
+    const h46 = join(w46, 'home');
+    const pr46 = join(h46, 'profiles', 'web');
+    await mkdir(pr46, { recursive: true });
+    await writeFile(join(pr46, 'cordis.patch.yml'), '- insert:\n  - id: dsh-undo-savepoint\n    name: dsh-undo-savepoint\n', 'utf8');
+    await writeFile(join(pr46, 'package.json'), '{"name":"p"}\n', 'utf8');
+    const hp46 = join(h46, 'cordis.patch.yml');
+    await writeFile(hp46, '- insert:\n  - id: dsh-undo-savepoint\n    name: dsh-undo-savepoint\n  - id: dsh-mcp-client\n    name: dsh-mcp-client\n    config:\n      headers:\n        Authorization: Bearer sk-w46-keep\n', 'utf8');
+    const r5 = await core.dedupeMount({ homeDir: h46, profileDir: pr46, profileName: 'web' });
+    const t5 = await readFile(hp46, 'utf8');
+    check(Array.isArray(r5.exempt) && r5.exempt.length === 1 && r5.removed.length === 0,
+      'W46: dedupeMount 对携带 config 的位置上报 exempt 且不删除该处');
+    check(t5.includes('sk-w46-keep') && t5.includes('dsh-undo-savepoint') && !core.findDanglingInserts(t5).length,
+      'W46: 豁免位置逐字未动且无悬空 insert 键');
+  }
+
   // W44: v4 会话实测与用例扩写（批次合集 §4，附 v4 实文件夹具生成器）。
   // E64 已修的路径由前四条断言钉住：v3 桶不再吞 v4，且 v4 是独立计数桶。
   {

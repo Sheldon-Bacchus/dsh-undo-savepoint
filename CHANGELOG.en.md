@@ -11,10 +11,13 @@ Notable changes to dsh-undo-savepoint. Dates are in local time (UTC+8). 中文�
 ### Fixed
 
 - **Generation census for session format v4.** DSH 0.2.0 writes session logs as v4, but the health census folded v4 into the v3 bucket, so desktop users saw an inflated v3 count with no way to view v4. The census now keeps v0, v2, v3 and v4 in separate buckets, counts higher generations separately, and reports them in the upgrade health log.
+- **Mount deduplication no longer touches user configuration.** Patch entries used to be identified by the mere presence of the plugin name on a line, so a user entry that happened to mention the plugin name in its config text was deleted whole and its configuration lost. Entries are now recognised only when their `id` or `name` is the plugin name, and any mount location carrying a non-empty `config` block is exempted entirely, preferring a duplicate over damaging user configuration.
+- **Removing a mount entry no longer leaves a broken structure.** Removal could previously leave an emptied `insert` key, orphaned entry lines, or a leftover `config` block belonging to the plugin entry, turning the patch file into an invalid structure. Removal now works at entry granularity: the plugin entry leaves together with its config block and marker comment, and the new dangling-key detection and cleanup follow the same granularity.
 
 ### Tests
 
 - Added a real-file v4 session fixture generator covering the recognition, repair, health and redaction paths, 24 assertions in total; the smoke gate now stands at 466.
+- Added cases for mount exemption, tightened entry recognition and dangling-key cleanup, 10 assertions in total; the smoke gate now stands at 476.
 
 ## [0.4.9] - 2026-09-16
 
