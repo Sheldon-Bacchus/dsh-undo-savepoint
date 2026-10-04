@@ -9,7 +9,7 @@ import { mkdtemp, writeFile, readFile, mkdir, rm as rmRaw, readdir, chmod, symli
 import { rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as zlib from 'node:zlib';
 // zstd Zlib API（zstdCompressSync / zstdDecompressSync）需 Node 22.15+；Node 20 下用例 38 跳过
 const hasZstd = typeof zlib.zstdCompressSync === 'function' && typeof zlib.zstdDecompressSync === 'function';
@@ -3102,6 +3102,199 @@ console.log('== W49. #39 expanded redaction list + .yml routing + guard two + cl
   const reSrc49 = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'redact-existing.mjs'), 'utf8');
   check(!/\b(?:execFile|spawn|exec)\s*\(/.test(reSrc49), 'W49 存量工具：不含任何子进程调用');
   await rm(w49root, { recursive: true, force: true });
+}
+
+// ── W48：安装锚点、宿主托管 bundle、桌面拒动 ─────────────────────────────────
+// 反向敏感：改动前 bundleAnchors 只有 profile 与 ~/.dsh 两个锚点（~/.dsh 还排在前面），
+// 桌面 profile 上解析不到的官方核心 bundle 一律报 cannot resolve 硬失败，safeModeSet(on)
+// 在桌面 profile 上会真的改写桌面补丁；悬空 insert 键既无报告也无清理入口。
+console.log('== W48. install anchor, host-managed bundles, desktop safe-mode refusal ==');
+{
+  const base48 = await import('../lib/base.mjs');
+  const health48 = await import('../lib/health.mjs');
+  const core48 = await import('../lib/core.mjs');
+  const { execFile: exec48 } = await import('node:child_process');
+  const w48root = await mkdtemp(join(tmpdir(), 'dsh-undo-test48-'));
+  const snap48 = join(w48root, 'snaps');
+  await mkdir(join(snap48, 'auto'), { recursive: true });
+  await mkdir(join(snap48, 'manual'), { recursive: true });
+  const sha48 = async (p) => core48.sha1Hex(await readFile(p));
+  const stamp48 = async (paths) => (await Promise.all(paths.map(sha48))).join('|');
+
+  // (1) 锚点次序：三个可解析目录里各放一份同名 probe-pkg。必须走子进程，
+  //     DSH_HOME / DSH_ROOT 是 base.mjs 的 import 期常量，进程内改不动。
+  const anchor48 = join(w48root, 'anchor');
+  const install48 = join(anchor48, 'installTree'), homeA48 = join(anchor48, 'home'), profileA48 = join(anchor48, 'profile');
+  const mkPkg48 = async (dir, marker) => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'probe-host', marker }), 'utf8');
+    const pkgDir = join(dir, 'node_modules', 'probe-pkg');
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(join(pkgDir, 'package.json'),
+      JSON.stringify({ name: 'probe-pkg', marker, dsh: { bundle: { patch: 'patch.js' } } }), 'utf8');
+    await writeFile(join(pkgDir, 'patch.js'), `export const marker = '${marker}';\n`, 'utf8');
+  };
+  await mkdir(join(install48, 'lib'), { recursive: true });
+  await writeFile(join(install48, 'lib', 'bin.js'), '// dsh product tree stand-in\n', 'utf8');
+  await mkPkg48(install48, 'install'); await mkPkg48(homeA48, 'home'); await mkPkg48(profileA48, 'profile');
+  await writeFile(join(homeA48, 'settings.yaml'), 'model: x\n', 'utf8');
+  const libUrl48 = (f) => pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', f)).href;
+  const probe48 = join(w48root, 'anchor-probe.mjs');
+  await writeFile(probe48, [
+    `const { buildConfig } = await import(${JSON.stringify(libUrl48('base.mjs'))});`,
+    `const { bundleAnchors, bundleCheck, readDshVersion } = await import(${JSON.stringify(libUrl48('health.mjs'))});`,
+    "const { readFile } = await import('node:fs/promises');",
+    "const { join } = await import('node:path');",
+    'const [profileName, profileDir, name] = process.argv.slice(2);',
+    'const cfg = buildConfig({ profileName, profileDir });',
+    'const out = { anchors: (await bundleAnchors(cfg, profileDir)).length, version: await readDshVersion() };',
+    'try {',
+    '  const r = await bundleCheck(cfg, name, profileDir);',
+    '  out.ok = r.ok === true; out.hostManaged = r.hostManaged === true; out.reason = r.reason ?? null;',
+    '  if (r.dir) { try { out.marker = JSON.parse(await readFile(join(r.dir, "package.json"), "utf8")).marker ?? null; } catch { out.marker = null; } }',
+    '} catch (e) { out.threw = String((e && e.message) || e); }',
+    'console.log(JSON.stringify(out));',
+    'process.exit(0);',
+    '',
+  ].join('\n'), 'utf8');
+  // E80：宿主注入的 DSH_PROFILE / DSH_UNDO_* 会抢跑通道，子进程环境必须干净。
+  const env48 = (extra) => {
+    const e = { ...process.env, ...extra, DSH_UNDO_LANG: 'en', DSH_UNDO_NO_DESKTOP: '1' };
+    delete e.DSH_PROFILE; delete e.DSH_UNDO_SETTINGS; delete e.DSH_UNDO_ROOT;
+    return e;
+  };
+  const run48 = (env, args) => new Promise((resolve) => {
+    exec48(process.execPath, [probe48, ...args], { env }, (err, stdout) => resolve({
+      code: err ? (err.code ?? 1) : 0,
+      json: (() => { try { return JSON.parse(String(stdout)); } catch { return null; } })(),
+    }));
+  });
+  const anchorProbe48 = () => run48(env48({ DSH_ROOT: install48, DSH_HOME: homeA48 }), ['web', profileA48, 'probe-pkg']);
+  const p1a = await anchorProbe48();
+  await rm(join(install48, 'node_modules'), { recursive: true, force: true });
+  const p1b = await anchorProbe48();
+  await rm(join(profileA48, 'node_modules'), { recursive: true, force: true });
+  const p1c = await anchorProbe48();
+  check(
+    [p1a, p1b, p1c].every((x) => x.json && x.json.ok === true && x.json.anchors === 3)
+      && [p1a, p1b, p1c].map((x) => x.json.marker).join(',') === 'install,profile,home',
+    'W48 锚点次序：安装目录 > profile > ~/.dsh（三锚点同名包逐级回落）',
+  );
+
+  // (2) 探测容错：DSH_ROOT 不是产品树且取不到 @deepseek-ai/dsh 时，只少一个锚点，不外抛。
+  const bare48 = join(anchor48, 'notAProductTree');
+  await mkdir(bare48, { recursive: true });
+  await writeFile(join(bare48, 'package.json'), '{"name":"not-a-dsh-tree"}\n', 'utf8');
+  const empty48 = join(anchor48, 'emptyProfile');
+  await mkdir(empty48, { recursive: true });
+  const p2 = await run48(env48({ DSH_ROOT: bare48, DSH_HOME: homeA48 }), ['web', empty48, 'probe-absent-pkg']);
+  check(
+    p2.code === 0 && !!p2.json && !('threw' in p2.json) && p2.json.ok === false
+      && p2.json.anchors === 2 && (p2.json.version === null || typeof p2.json.version === 'string'),
+    'W48 探测容错：非产品树 DSH_ROOT + 取不到 dsh 包时只少一个锚点，不抛异常',
+  );
+
+  // (3)(4)(5) 桌面判定夹具：home 下 desktop 与 web 两个 profile，bundles 都声明两个名字。
+  const home48 = join(w48root, 'home');
+  const profileD48 = join(home48, 'profiles', 'desktop'), profileW48 = join(home48, 'profiles', 'web');
+  const vendorProbe48 = '@deepseek-ai/dsh-probe-not-installed';
+  const miss48 = 'probe-pkg-not-installed';
+  const bundles48 = JSON.stringify({ name: 'probe-profile', dsh: { profile: { bundles: [vendorProbe48, miss48] } } });
+  for (const [dir, nm] of [[profileD48, 'desktop'], [profileW48, 'web']]) {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'package.json'), bundles48, 'utf8');
+    await writeFile(join(dir, 'cordis.patch.yml'), `# ${nm} patch\n[]\n`, 'utf8');
+  }
+  await writeFile(join(home48, 'cordis.patch.yml'), '# home patch\n[]\n', 'utf8');
+  const mkCfg48 = (name, dir) => base48.buildConfig({
+    homeDir: home48, profileName: name, profileDir: dir,
+    manualDir: join(snap48, 'manual'), autoDir: join(snap48, 'auto'),
+  });
+  const cfgD48 = mkCfg48('desktop', profileD48), cfgW48 = mkCfg48('web', profileW48);
+  const pkgD48 = JSON.parse(bundles48);
+  const rep48 = await health48.runDoctor(cfgD48);
+  const host48 = rep48.checks.filter((c) => c.code === 'pre-bundle-host');
+  const kept48 = (await health48.computeSafeBundles(cfgD48, pkgD48)).kept;
+  const r3 = await health48.bundleCheck(cfgD48, vendorProbe48, profileD48);
+  check(
+    r3.ok === false && r3.hostManaged === true && /host-managed/.test(String(r3.reason))
+    && host48.length === 1 && host48[0].name.includes(vendorProbe48)
+    && host48[0].level === 'ok' && host48[0].detail.includes('host-managed')
+    && kept48.includes(vendorProbe48) && cfgD48.profileDir === profileD48,
+    'W48 桌面宿主托管 bundle：解析不到也不算异常（ok 档 + 理由可辨，不参与中和）',
+  );
+
+  // (4) 真缺失不被豁免吞掉：非官方核心名照旧 cannot resolve 硬失败，并进中和名单。
+  const err48 = rep48.checks.filter((c) => c.code === 'pre-bundle' && c.name.includes(miss48));
+  const pruned48 = (await health48.computeSafeBundles(cfgD48, pkgD48)).pruned;
+  const r4 = await health48.bundleCheck(cfgD48, miss48, profileD48);
+  check(
+    r4.ok === false && r4.hostManaged !== true && r4.reason === `cannot resolve ${miss48}`
+      && err48.length === 2 && err48.every((c) => c.level === 'err')
+      && pruned48.some((p) => p.name === miss48),
+    'W48 真缺失不被吞：桌面 profile 上非核心名的 bundle 仍报 cannot resolve 硬失败',
+  );
+
+  // (5) 非桌面形态输出不变：web profile 上同一个核心名照旧硬失败。
+  const r5 = await health48.bundleCheck(cfgW48, vendorProbe48, profileW48);
+  const errW48 = rep48.checks.filter((c) => c.code === 'pre-bundle' && c.name.includes(vendorProbe48));
+  check(
+    r5.ok === false && r5.hostManaged !== true && r5.reason === `cannot resolve ${vendorProbe48}`
+      && errW48.length === 1 && errW48[0].level === 'err',
+    'W48 非桌面形态不变：web profile 上同一核心名照旧硬失败（豁免只认 desktop）',
+  );
+
+  // (6) 桌面拒动：落在任何写盘之前，三份文件逐字节不变、零备份残留。
+  const desk6 = [join(profileD48, 'package.json'), join(profileD48, 'cordis.patch.yml'), join(home48, 'cordis.patch.yml')];
+  const before6 = await stamp48(desk6);
+  const r6 = await health48.safeModeSet(cfgD48, true);
+  const after6 = await stamp48(desk6);
+  const auto6 = await readdir(join(snap48, 'auto'));
+  check(
+    r6.ok === false && r6.reason === 'desktop-profile'
+      && typeof r6.error === 'string' && r6.error.trim().length > 20
+      && after6 === before6 && !auto6.some((n) => n.startsWith('safe-mode')),
+    'W48 桌面拒动：safeModeSet(on) 在任何写盘前拒绝，三份文件逐字节不变、零备份残留',
+  );
+
+  // (7) 只挡 on：web 上安全模式照常进入；桌面 profile 上前一次（CLI 侧）开过的状态仍能 off。
+  const r7a = await health48.safeModeSet(cfgW48, true);
+  const webPatch7 = await readFile(join(profileW48, 'cordis.patch.yml'), 'utf8');
+  const deskBackup7 = join(snap48, 'auto', 'safe-mode-backup-manual-probe.yml');
+  await writeFile(deskBackup7, '# desktop patch restored by off\n[]\n', 'utf8');
+  await writeFile(join(snap48, 'auto', 'safe-mode.json'), JSON.stringify({
+    active: true, enteredAt: '2026-10-04T00:00:00.000Z', backup: deskBackup7,
+    snapshotId: 'manual-probe', homeFingerprint: null,
+  }), 'utf8');
+  const r7b = await health48.safeModeSet(cfgD48, false);
+  check(
+    r7a.ok === true && r7a.active === true && webPatch7.includes('SAFE MODE')
+      && r7b.ok === true && r7b.active === false
+      && (await readFile(join(profileD48, 'cordis.patch.yml'), 'utf8')).includes('restored by off'),
+    'W48 只挡 on：web 上安全模式照常进入，桌面 profile 上 off 仍可关闭（逃生通道不被堵）',
+  );
+
+  // (8) 非默认 home（E:\dsh 替身）：临时 home 下的 desktop profile 同样豁免、同样被拒动。
+  const home8 = join(w48root, 'home8'), profileD8 = join(home8, 'profiles', 'desktop');
+  await mkdir(profileD8, { recursive: true });
+  await writeFile(join(profileD8, 'package.json'), bundles48, 'utf8');
+  await writeFile(join(profileD8, 'cordis.patch.yml'), '# desktop patch (stand-in home)\n[]\n', 'utf8');
+  await writeFile(join(home8, 'cordis.patch.yml'), '# home patch (stand-in home)\n[]\n', 'utf8');
+  const cfg8 = base48.buildConfig({
+    homeDir: home8, profileName: 'desktop', profileDir: profileD8,
+    manualDir: join(w48root, 's8', 'manual'), autoDir: join(w48root, 's8', 'auto'),
+  });
+  const r8a = await health48.bundleCheck(cfg8, vendorProbe48, profileD8);
+  const eighth8 = [join(profileD8, 'package.json'), join(profileD8, 'cordis.patch.yml')];
+  const before8 = await stamp48(eighth8);
+  const r8b = await health48.safeModeSet(cfg8, true);
+  const after8 = await stamp48(eighth8);
+  check(
+    home8.startsWith(tmpdir()) && r8a.hostManaged === true && r8b.ok === false
+      && r8b.reason === 'desktop-profile' && after8 === before8,
+    'W48 非默认 home：临时 home 下的 desktop profile 同样享豁免、同样被拒动',
+  );
+  await rm(w48root, { recursive: true, force: true });
 }
 
 console.log(`\n== RESULT: ${pass} passed, ${fail} failed ==`);
