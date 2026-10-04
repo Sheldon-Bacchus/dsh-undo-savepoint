@@ -8,6 +8,7 @@ Notable changes to dsh-undo-savepoint. Dates are in local time (UTC+8). 中文�
 
 - **Support range extended to the DSH desktop build.** The README and package manifest previously declared support only up to the pre-0.2.0 version lines, leaving desktop profile users unable to tell from the documentation whether they could install the plugin. The declaration now covers DSH 0.2.0-rc.2 desktop, the READMEs gained a support-range section in both languages, and the safe-mode limitation under the desktop profile is stated explicitly.
 - **The health check now warns while the desktop app is running.** A running desktop app holds the profile and the patch files, so changes made then can be overwritten by the running host, and the user had no way to know. Boot preflight now probes for the desktop process and, on a hit, reports one warning that points at quitting the desktop app completely and retrying. The process name is matched with a single rule across all three platforms, neither a failed probe nor a confirmed idle state produces a warning, and `DSH_UNDO_NO_DESKTOP=1` skips the probe altogether.
+- **Official sanitize traces are recognised and can be restored.** When the desktop app fails to start, the third button of the official recovery dialog removes the plugin from `dsh.profile.bundles` and renames the patch file into a backup, with no restore entry in the UI, so the user's experience is a plugin that silently disappears. The health check now recognises such a trace from three elements (a backup file exists, the current patch does not mention this plugin, and the manifest's bundles do not list it; any one missing means no report), reports the newest backup name, and `undo_doctor` with its `fix` flag (or the offline `dsh-undo.ps1 doctor -Fix`) can restore the patch and the mount entry from that backup after copying the current patch to `.dsh-undo-bak` and taking a pre-fix snapshot as usual. The restore is not an automatic rollback of that choice, and the report says so.
 
 ### Fixed
 
@@ -30,6 +31,7 @@ Notable changes to dsh-undo-savepoint. Dates are in local time (UTC+8). 中文�
 - Added cases for the six-tier profile resolution, source reporting, store inheritance and detection-chain compatibility, 17 assertions in total; the smoke gate now stands at 493.
 - Added cases for install-anchor order, probe tolerance, host-managed exemption, genuine misses staying hard failures, the non-desktop shape staying unchanged, desktop refusal, `on`-only blocking and a non-default home, 8 assertions in total; the smoke gate now stands at 501.
 - Added cases for the two profile-discovery rules, the three desktop-probe states, an unknown state for a missing command, the bilingual wording of the running-app guidance, no false warning when idle or when the probe fails, and silent version reading, 6 assertions in total; the smoke gate now stands at 507.
+- Added cases for the three-element sanitize-trace detection (including three single-element negatives) and for a one-click restore followed by a clean re-check, 2 assertions in total; the smoke gate now stands at 509.
 
 ## [0.4.9] - 2026-09-16
 

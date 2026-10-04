@@ -148,6 +148,8 @@
   "doctor.tail": "{total} snapshots total.",
   "doctor.hostManaged": "host-managed bundle ({name}): started by the desktop host itself and not present under the profile node_modules; no action needed.",
   "doctor.desktopRunning": "the desktop app (DeepSeek Harness) is running: it holds the profile and the patch files, so changes made now can be overwritten by the running host. Quit the desktop app completely, then retry.",
+  "doctor.sanitizeTrace": "official sanitize trace detected (backup {backup}): when the desktop app fails to start, the third button of the official recovery dialog removes this plugin from dsh.profile.bundles and renames the patch file to {backup}, with no restore entry in the UI. The patch file no longer mentions this plugin and dsh.profile.bundles does not list it.",
+  "doctor.sanitizeTraceFix": "if you do want the plugin back, run doctor with the fix flag (or dsh-undo.ps1 doctor -Fix) to restore the patch and the mount entry from {backup}; this is not an automatic rollback of that choice, it only puts the plugin back.",
   "profile.source": "profile resolved from: {src}",
   "profile.inherited": "previous snapshot location detected ({from}); reusing it.",
   "profile.doctorLine": "profile: {name} (source {src}) {extra}",

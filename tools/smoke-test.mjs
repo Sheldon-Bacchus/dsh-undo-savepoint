@@ -2941,6 +2941,57 @@ await rm(root, { recursive: true, force: true });
     const g43 = await core.dshVersionGuard({ ...cfgW, autoDir: join(w43root, 'version-auto'), homeDir: homeMissing43 });
     check(threw43 === null && (v43 === null || typeof v43 === 'string') && g43.current === v43 && g43.changed === false,
       `W43: 版本读取静默不抛错（${JSON.stringify(v43)}），无历史状态时不误报升级`);
+
+    // (7) 部分 4：官方 sanitize 痕迹的检出。三要素（备份存在、补丁里没有本插件、bundles 里
+    // 也没有本插件）齐全才报，各自缺一都不报；命中时报最新那份备份。这里不放开
+    // DSH_UNDO_NO_DESKTOP，桌面探测走短路，验收只钉 sanitize 这一段，不受本机是否真开着
+    // 桌面端影响。
+    const sanPatch43 = '- insert:\n    - id: dsh-undo-savepoint\n      name: dsh-undo-savepoint\n';
+    const sanBank43 = '# official sanitize left this file behind\n[]\n';
+    const zhFix43 = i18n43.t('doctor.sanitizeTraceFix', { backup: 'BACKUP' }, 'zh');
+    const mkSan43 = async (tag, { patch, bundles, backups }) => {
+      const h = join(w43root, `home-san43-${tag}`);
+      const d = join(h, 'profiles', 'desktop');
+      await mkdir(d, { recursive: true });
+      await writeFile(join(d, 'cordis.patch.yml'), patch);
+      await writeFile(join(d, 'package.json'),
+        `{"name":"desktop-profile","dsh":{"profile":{"bundles":${JSON.stringify(bundles)}}}}\n`);
+      for (const [i, b] of (backups ?? []).entries()) {
+        await writeFile(join(d, `cordis.patch.yml.bak-${b}`), i === 0 ? sanBank43 : sanPatch43);
+      }
+      return { home: h, dir: d, cfg: { ...cfgW, homeDir: h, profileName: 'desktop', profileDir: d } };
+    };
+    const trace43 = async (cfg) => (await core.runDoctor(cfg)).checks.filter((c) => c.code === 'pre-sanitize-trace');
+    const sanFull43 = await mkSan43('full', { patch: '[]\n', bundles: ['@deepseek-ai/dsh-base'], backups: ['20261001-100000', '20261003-093000'] });
+    const sanPatchKeep43 = await mkSan43('patch-keeps', { patch: sanPatch43, bundles: ['@deepseek-ai/dsh-base'], backups: ['20261001-100000'] });
+    const sanBundlesKeep43 = await mkSan43('bundles-keep', { patch: '[]\n', bundles: ['@deepseek-ai/dsh-base', 'dsh-undo-savepoint'], backups: ['20261001-100000'] });
+    const sanNoBackup43 = await mkSan43('no-backup', { patch: '[]\n', bundles: ['@deepseek-ai/dsh-base'], backups: [] });
+    const hitSan43 = await trace43(sanFull43.cfg);
+    const negSan43 = [
+      await trace43(sanPatchKeep43.cfg),
+      await trace43(sanBundlesKeep43.cfg),
+      await trace43(sanNoBackup43.cfg),
+    ];
+    check(hitSan43.length === 1 && hitSan43[0].level === 'warn' && hitSan43[0].fixable === true
+      && hitSan43[0].detail.includes('20261003-093000') && !hitSan43[0].detail.includes('20261001-100000')
+      && hitSan43[0].fix.includes('doctor -Fix') && zhFix43.includes('装回来')
+      && negSan43.every((r) => r.length === 0),
+      `W43: sanitize 痕迹三要素齐全才报、缺一不报，命中最新的那份备份（命中 ${hitSan43.length} 条，三条缺一各自 ${negSan43.map((r) => r.length).join('/')} 条）`);
+
+    // (8) 部分 4：一键恢复。补丁被最新备份覆盖、插件写回 dsh.profile.bundles 且原有宿主
+    // bundle 不丢、当前补丁先留 .dsh-undo-bak、恢复后复检不再命中。
+    const fixSan43 = await core.runDoctorFix(sanFull43.cfg);
+    const afterSan43 = await readFile(join(sanFull43.dir, 'cordis.patch.yml'), 'utf8');
+    const pkgSan43 = JSON.parse(await readFile(join(sanFull43.dir, 'package.json'), 'utf8'));
+    let bakSan43 = null;
+    try { bakSan43 = await readFile(join(sanFull43.dir, 'cordis.patch.yml.dsh-undo-bak'), 'utf8'); } catch { /* 缺备份时下面判失败 */ }
+    const recheckSan43 = await trace43(sanFull43.cfg);
+    const bundlesSan43 = pkgSan43?.dsh?.profile?.bundles ?? [];
+    check(fixSan43.applied.some((a) => a.code === 'pre-sanitize-trace' && a.ok === true)
+      && afterSan43 === sanPatch43 && bakSan43 === '[]\n'
+      && bundlesSan43.includes('dsh-undo-savepoint') && bundlesSan43.includes('@deepseek-ai/dsh-base')
+      && recheckSan43.length === 0,
+      `W43: sanitize 恢复把补丁换成最新备份、插件写回 bundles 且复检干净（applied=${fixSan43.applied.filter((a) => a.code === 'pre-sanitize-trace').length}，复检 ${recheckSan43.length} 条）`);
   }
 
   // W09: 会话普查——浅层计数 + 零字节异常 + 深层结构分类

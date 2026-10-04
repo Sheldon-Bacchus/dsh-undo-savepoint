@@ -148,6 +148,8 @@
   "doctor.tail": "共 {total} 个快照。",
   "doctor.hostManaged": "宿主托管的 bundle（{name}）：由桌面版宿主自行拉起，不在 profile 的 node_modules 里，无需处理。",
   "doctor.desktopRunning": "桌面端正在运行（DeepSeek Harness）：它持有 profile 与补丁文件，此时改动可能被运行中的宿主覆盖。请先完全退出桌面端，再重试本次操作。",
+  "doctor.sanitizeTrace": "检测到官方 sanitize 痕迹（备份 {backup}）：桌面端启动失败时，官方恢复弹窗的第三项会把本插件移出 dsh.profile.bundles，并把补丁文件改名为 {backup}，界面上没有恢复入口。当前补丁文件里已经没有本插件，清单的 dsh.profile.bundles 里也没有。",
+  "doctor.sanitizeTraceFix": "确认要把插件装回来时，用 doctor 的 fix 参数（或 dsh-undo.ps1 doctor -Fix）按 {backup} 恢复补丁与挂载声明；这不是对那次选择的自动回退，只是把插件装回来。",
   "profile.source": "profile 来源：{src}",
   "profile.inherited": "检测到历史快照位置（{from}），本次沿用该位置。",
   "profile.doctorLine": "profile：{name}（来源 {src}）{extra}",
