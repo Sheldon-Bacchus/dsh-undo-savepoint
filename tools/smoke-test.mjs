@@ -2851,6 +2851,98 @@ await rm(root, { recursive: true, force: true });
       'W34: Node at the 22.15 threshold stays clean');
   }
 
+  // W43: 桌面 profile 安装链适配（批次合集 §7）。本块覆盖前三部分：卸载覆盖 desktop
+  // profile、桌面端运行中指引、版本读取的防御性静默。第四部分（官方 sanitize 痕迹的检测
+  // 与一键恢复）紧随其后独立成块，与本次施工的两个提交一一对应。
+  {
+    const w43root = join(rootW, 'w43');
+    const w43legacy = join(w43root, 'legacy-profile');
+    const w43mount = join(w43legacy, 'cordis.patch.yml');
+    await mkdir(w43legacy, { recursive: true });
+    await writeFile(w43mount, [
+      '# legacy patch',
+      '- insert:',
+      '    - id: dsh-undo-savepoint',
+      '      name: dsh-undo-savepoint',
+      '',
+    ].join('\n'));
+
+    // (1)(2) profile 目录发现：profiles/ 整个不存在时回退当前 profile 目录（旧行为保持）；
+    // profiles/ 存在却没有可扫的 profile 目录时不回退，并明确报空目录。两例共用同一个
+    // 含挂载声明的 legacy profile 目录，差别只在 home 下有没有 profiles/，断言因此直接落在
+    // 「扫了还是没扫」上，而不是落在提示文案上。
+    const homeMissing43 = join(w43root, 'home-missing');
+    const homeEmpty43 = join(w43root, 'home-empty');
+    await mkdir(join(homeEmpty43, 'profiles'), { recursive: true });
+    const planOpts43 = { desktopDir: join(w43root, 'desktop'), listLinks: async () => [] };
+    const planMissing43 = await core.planUninstall({ ...cfgW, homeDir: homeMissing43, profileDir: w43legacy }, planOpts43);
+    const planEmpty43 = await core.planUninstall({ ...cfgW, homeDir: homeEmpty43, profileDir: w43legacy }, planOpts43);
+    check(planMissing43.plan.some((x) => x.what === 'mount declaration' && x.path === w43mount),
+      'W43: profiles 目录缺失时回退当前 profile 目录，挂载声明仍被扫到');
+    check(!planEmpty43.plan.some((x) => x.path === w43mount)
+      && planEmpty43.notes.some((n) => n.includes('no profile directory under')),
+      `W43: profiles 目录存在但为空时不回退并报空目录（notes=${JSON.stringify(planEmpty43.notes)}）`);
+
+    // (3)(4) 桌面运行探测。命令与参数注入，用假进程列表钉住解析分支，跨平台一致；
+    // DSH_UNDO_NO_DESKTOP=1 的短路也在本组钉住。门禁进程全局置了该开关（不碰真实桌面），
+    // 因此探测与体检断言都要临时摘掉它再还原。
+    const health43 = await import('../lib/health.mjs');
+    const probeRun43 = join(w43root, 'probe-running.mjs');
+    const probeIdle43 = join(w43root, 'probe-idle.mjs');
+    await writeFile(probeRun43, 'console.log(\'"DeepSeek Harness.exe","6972","Console","2","116,004 K"\')\n');
+    await writeFile(probeIdle43, 'console.log("INFO: No tasks are running which match the specified criteria.")\n');
+    const probe43 = (script) => ({ platform: 'win32', desktopProbeCommand: process.execPath, desktopProbeArgs: [script] });
+    const withProbe43 = async (fn) => {
+      const saved = process.env.DSH_UNDO_NO_DESKTOP;
+      delete process.env.DSH_UNDO_NO_DESKTOP;
+      try { return await fn(); } finally {
+        if (saved === undefined) delete process.env.DSH_UNDO_NO_DESKTOP; else process.env.DSH_UNDO_NO_DESKTOP = saved;
+      }
+    };
+    const st43 = await withProbe43(async () => ([
+      await health43.desktopProcessState(probe43(probeRun43)),
+      await health43.desktopProcessState(probe43(probeIdle43)),
+    ]));
+    const savedNoDesktop43 = process.env.DSH_UNDO_NO_DESKTOP;
+    process.env.DSH_UNDO_NO_DESKTOP = '1';
+    let st43short = null;
+    try { st43short = await health43.desktopProcessState(probe43(probeRun43)); }
+    finally { if (savedNoDesktop43 === undefined) delete process.env.DSH_UNDO_NO_DESKTOP; else process.env.DSH_UNDO_NO_DESKTOP = savedNoDesktop43; }
+    check(st43[0] === 'running' && st43[1] === 'not-running' && st43short === 'not-running',
+      `W43: 桌面探测三态与 NO_DESKTOP 短路实得 running/${st43[1]}/${st43short}，期望 running/not-running/not-running`);
+    const st43unknown = await withProbe43(() => health43.desktopProcessState(
+      { platform: 'win32', desktopProbeCommand: join(w43root, 'no-such-probe-binary'), desktopProbeArgs: [] }));
+    check(st43unknown === 'unknown', `W43: 命令不存在时探测记 unknown 且不外抛（实得 ${st43unknown}）`);
+
+    // (5) running 态下体检带桌面端指引，文案同时命中「完全退出」与进程名；未运行与探测失败
+    // 都不产出该检查项。门禁固定英文输出，中文口径直接查词典，两种语言都钉住。
+    const i18n43 = await import('../lib/i18n.mjs');
+    const zhText43 = i18n43.t('doctor.desktopRunning', undefined, 'zh');
+    const w43home2 = join(w43root, 'home-desktop');
+    await mkdir(join(w43home2, 'profiles', 'desktop'), { recursive: true });
+    await writeFile(join(w43home2, 'profiles', 'desktop', 'package.json'), '{"name":"desktop-profile"}\n');
+    const cfg43 = { ...cfgW, homeDir: w43home2, profileName: 'desktop', profileDir: join(w43home2, 'profiles', 'desktop') };
+    const hit43 = await withProbe43(async () => (await core.runDoctor(cfg43, probe43(probeRun43)))
+      .checks.filter((c) => c.code === 'pre-desktop-running'));
+    const quiet43 = await withProbe43(async () => ([
+      await core.runDoctor(cfg43, probe43(probeIdle43)),
+      await core.runDoctor(cfg43, { platform: 'win32', desktopProbeCommand: join(w43root, 'no-such-probe-binary'), desktopProbeArgs: [] }),
+    ]));
+    check(hit43.length === 1 && hit43[0].level === 'warn'
+      && hit43[0].detail.includes('DeepSeek Harness') && hit43[0].detail.includes('completely')
+      && zhText43.includes('完全退出') && zhText43.includes('DeepSeek Harness')
+      && quiet43.every((r) => r.checks.filter((c) => c.code === 'pre-desktop-running').length === 0),
+      `W43: 运行中给出「完全退出」指引、未运行与探测失败都不报（${hit43[0]?.detail ?? 'no check'}）`);
+
+    // (6) W43 决策点 3：版本读取保持原样，取不到版本时静默为 null 且不误报升级。
+    let v43 = null;
+    let threw43 = null;
+    try { v43 = await core.readDshVersion(); } catch (e) { threw43 = e; }
+    const g43 = await core.dshVersionGuard({ ...cfgW, autoDir: join(w43root, 'version-auto'), homeDir: homeMissing43 });
+    check(threw43 === null && (v43 === null || typeof v43 === 'string') && g43.current === v43 && g43.changed === false,
+      `W43: 版本读取静默不抛错（${JSON.stringify(v43)}），无历史状态时不误报升级`);
+  }
+
   // W09: 会话普查——浅层计数 + 零字节异常 + 深层结构分类
   {
     const sessDir = join(homeW, 'sessions', 'census-test');

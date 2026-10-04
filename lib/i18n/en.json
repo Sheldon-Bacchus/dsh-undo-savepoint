@@ -147,6 +147,7 @@
   "doctor.head": "Diagnostic ({level}): ✅ {ok} healthy, ⚠️ {warn} warnings, ❌ {err} errors.",
   "doctor.tail": "{total} snapshots total.",
   "doctor.hostManaged": "host-managed bundle ({name}): started by the desktop host itself and not present under the profile node_modules; no action needed.",
+  "doctor.desktopRunning": "the desktop app (DeepSeek Harness) is running: it holds the profile and the patch files, so changes made now can be overwritten by the running host. Quit the desktop app completely, then retry.",
   "profile.source": "profile resolved from: {src}",
   "profile.inherited": "previous snapshot location detected ({from}); reusing it.",
   "profile.doctorLine": "profile: {name} (source {src}) {extra}",
