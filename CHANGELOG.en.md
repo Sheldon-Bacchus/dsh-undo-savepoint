@@ -10,6 +10,10 @@ Notable changes to dsh-undo-savepoint. Dates are in local time (UTC+8). 中文�
 - **The health check now warns while the desktop app is running.** A running desktop app holds the profile and the patch files, so changes made then can be overwritten by the running host, and the user had no way to know. Boot preflight now probes for the desktop process and, on a hit, reports one warning that points at quitting the desktop app completely and retrying. The process name is matched with a single rule across all three platforms, neither a failed probe nor a confirmed idle state produces a warning, and `DSH_UNDO_NO_DESKTOP=1` skips the probe altogether.
 - **Official sanitize traces are recognised and can be restored.** When the desktop app fails to start, the third button of the official recovery dialog removes the plugin from `dsh.profile.bundles` and renames the patch file into a backup, with no restore entry in the UI, so the user's experience is a plugin that silently disappears. The health check now recognises such a trace from three elements (a backup file exists, the current patch does not mention this plugin, and the manifest's bundles do not list it; any one missing means no report), reports the newest backup name, and `undo_doctor` with its `fix` flag (or the offline `dsh-undo.ps1 doctor -Fix`) can restore the patch and the mount entry from that backup after copying the current patch to `.dsh-undo-bak` and taking a pre-fix snapshot as usual. The restore is not an automatic rollback of that choice, and the report says so.
 
+### Security
+
+- **Patch-layer and credential-layer files are added to the redaction list, with a tool to clean up existing plaintext snapshots.** The profile patch layer (`cordis.patch.yml`) and the `cordis.yml` beside it used to be stored as ordinary configuration, yet they can carry MCP tokens and model credentials, so anything captured in a snapshot spread in plaintext through snapshots and export bundles. Both files now go through the YAML redaction path together with the `.yml` and `.yaml` suffixes, token values live only in the local vault, and local restores pull the real values back. Existing snapshots can be cleaned in place with `tools/redact-existing.mjs`, which reports without writing by default and only writes with `--apply`, and a second run changes nothing. Credentials previously stored in plaintext should be rotated.
+
 ### Fixed
 
 - **Generation census for session format v4.** DSH 0.2.0 writes session logs as v4, but the health census folded v4 into the v3 bucket, so desktop users saw an inflated v3 count with no way to view v4. The census now keeps v0, v2, v3 and v4 in separate buckets, counts higher generations separately, and reports them in the upgrade health log.
@@ -26,6 +30,8 @@ Notable changes to dsh-undo-savepoint. Dates are in local time (UTC+8). 中文�
 
 ### Tests
 
+- Added cases for patch-layer and credential-layer redaction covering ingestion, routing, the restore guard, existing-snapshot cleanup and idempotence, including a byte-exact golden sample in the shape of the patch reported in the issue, 26 assertions in total; the smoke gate now stands at 438.
+- Added a case comparing the declared support range segment by segment as an array, 4 assertions in total; the smoke gate now stands at 442.
 - Added a real-file v4 session fixture generator covering the recognition, repair, health and redaction paths, 24 assertions in total; the smoke gate now stands at 466.
 - Added cases for mount exemption, tightened entry recognition and dangling-key cleanup, 10 assertions in total; the smoke gate now stands at 476.
 - Added cases for the six-tier profile resolution, source reporting, store inheritance and detection-chain compatibility, 17 assertions in total; the smoke gate now stands at 493.
